@@ -46,6 +46,7 @@ Run the below command to generate an image with Stable Diffusion XL - Lightning.
 ```bash
 python3 demo_txt2img_xl.py "Einstein" --version xl-1.0 --onnx-dir onnx-sdxl-lightning --engine-dir engine-sdxl-lightning --denoising-steps 8 --scheduler Lightning --guidance-scale 0.0
 ```
+当前的默认值是sdxl-lightning, 在get_path()里面extension对应的路径是sdxl-lightning的。同时，unetxl的加载部分也是extension对应lightning
 
 ## Configuration options
 - Noise scheduler can be set using `--scheduler <scheduler>`. Note: not all schedulers are available for every version.

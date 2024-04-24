@@ -44,7 +44,7 @@ class StableDiffusionXLPipeline(StableDiffusionPipeline):
         self.enable_refiner = enable_refiner
         self.nvtx_profile = kwargs['nvtx_profile']
         self.base = StableDiffusionPipeline(
-            pipeline_type=PIPELINE_TYPE.XL_BASE,
+            pipeline_type=PIPELINE_TYPE.XL_EXTENSION,
             vae_scaling_factor=vae_scaling_factor,
             return_latents=self.enable_refiner,
             **kwargs)
