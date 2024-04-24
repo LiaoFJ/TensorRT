@@ -37,6 +37,9 @@ from transformers import (
     CLIPTextModelWithProjection,
     CLIPTokenizer
 )
+from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file
+
 from utilities import merge_loras
 
 class Optimizer():
@@ -139,12 +142,10 @@ def get_path(version, pipeline, controlnets=None):
     elif version == "2.1-base":
         return "stabilityai/stable-diffusion-2-1-base"
     elif version == 'xl-1.0':
-        if pipeline.is_sd_xl_base() and (not pipeline.is_sd_xl_extension()):
+        if pipeline.is_sd_xl_base():
             return "stabilityai/stable-diffusion-xl-base-1.0"
         elif pipeline.is_sd_xl_refiner():
             return "stabilityai/stable-diffusion-xl-refiner-1.0"
-        elif pipeline.is_sd_xl_base() and pipeline.is_sd_xl_extension():
-            return "ByteDance/SDXL-Lightning"
         else:
             raise ValueError(f"Unsupported SDXL 1.0 pipeline {pipeline.name}")
     elif version == 'xl-turbo':
@@ -768,7 +769,7 @@ class UNetXLModel(BaseModel):
         model_opts = {'variant': 'fp16', 'torch_dtype': torch.float16} if self.fp16 else {}
         unet_model_dir = get_checkpoint_dir(self.framework_model_dir, self.version, self.pipeline, self.subfolder, torch_inference)
         if not os.path.exists(unet_model_dir):
-            if not self.pipeline.is_sd_xl_extension():
+            if not self.pipeline == "XL_EXTENSION":
                 model = UNet2DConditionModel.from_pretrained(self.path,
                                                              subfolder=self.subfolder,
                                                              use_safetensors=self.hf_safetensor,
@@ -776,10 +777,10 @@ class UNetXLModel(BaseModel):
                                                              **model_opts).to(self.device)
             else:
                 # 只有当load不用权重的model时才会使用
-                base = "stabilityai/stable-diffusion-xl-base-1.0"
+                repo = "ByteDance/SDXL-Lightning"
                 ckpt = "sdxl_lightning_8step_unet.safetensors"
-                model = UNet2DConditionModel.from_config(base, subfolder="unet").to("cuda", torch.float16)
-                model.load_state_dict(load_file(hf_hub_download(self.path, ckpt), device="cuda"))
+                model = UNet2DConditionModel.from_config(self.path, subfolder="unet").to("cuda", torch.float16)
+                model.load_state_dict(load_file(hf_hub_download(repo, ckpt), device="cuda"))
             if not torch_inference:
                 model.set_default_attn_processor()
             model.save_pretrained(unet_model_dir)
