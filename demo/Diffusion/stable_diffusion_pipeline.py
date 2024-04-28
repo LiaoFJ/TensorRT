@@ -151,18 +151,23 @@ class StableDiffusionPipeline:
         self.controlnets = controlnets
 
         # Pipeline type
+        def check_and_add_element(lst, element, delete=None):
+            [lst.append(x) for x in element if x not in lst]
+            lst.remove("unet") if delete == True else None
+
+        self.stages = []
         self.pipeline_type = pipeline_type
         if self.pipeline_type.is_txt2img() or self.pipeline_type.is_controlnet():
-            self.stages = ['clip','unet','vae']
-        elif self.pipeline_type.is_img2img() or self.pipeline_type.is_inpaint():
-            self.stages = ['vae_encoder', 'clip','unet','vae']
-        elif self.pipeline_type.is_sd_xl_base():
-            self.stages = ['clip', 'clip2', 'unetxl']
+            check_and_add_element(self.stages, ['clip', 'unet', 'vae'])
+        if self.pipeline_type.is_img2img() or self.pipeline_type.is_inpaint():
+            check_and_add_element(self.stages, ['vae_encoder', 'clip', 'unet', 'vae'])
+        if self.pipeline_type.is_sd_xl_base():
+            check_and_add_element(self.stages, ['clip', 'clip2', 'unetxl'], delete=True)
             if not return_latents:
-                self.stages.append('vae')
+                check_and_add_element(self.stages, ['vae'])
         elif self.pipeline_type.is_sd_xl_refiner():
             self.stages = ['clip2', 'unetxl', 'vae']
-        else:
+        if self.stages == None:
             raise ValueError(f"Unsupported pipeline {self.pipeline_type.name}.")
         self.return_latents = return_latents
 
@@ -175,7 +180,7 @@ class StableDiffusionPipeline:
             '2.0': 'DDIM',
             '2.1-base': 'PNDM',
             '2.1': 'DDIM',
-            'xl-1.0' : 'Euler',
+            'xl-1.0': 'Euler',
             'xl-turbo': 'EulerA'
         }
 
@@ -205,11 +210,12 @@ class StableDiffusionPipeline:
         elif scheduler == "UniPC":
             self.scheduler = makeScheduler(UniPCMultistepScheduler)
         else:
-            raise ValueError(f"Unsupported scheduler {scheduler}. Should be either DDIM, DDPM, EulerA, Euler, LCM, LMSD, PNDM, or UniPC or Lightning.")
+            raise ValueError(
+                f"Unsupported scheduler {scheduler}. Should be either DDIM, DDPM, EulerA, Euler, LCM, LMSD, PNDM, or UniPC.")
 
         self.config = {}
         if self.pipeline_type.is_sd_xl():
-            self.config['vae_torch_fallback'] = True
+            # self.config['vae_torch_fallback'] = True
             self.config['clip_hidden_states'] = True
         self.torch_inference = torch_inference
         self.use_cuda_graph = use_cuda_graph
@@ -237,7 +243,7 @@ class StableDiffusionPipeline:
         self.stream = None
         self.tokenizer = None
 
-    def loadResources(self, image_height, image_width, batch_size, seed):
+    def loadResources(self, image_height, image_width, batch_size, len_prompt, seed):
         # Initialize noise generator
         if seed:
             self.seed = seed
@@ -252,7 +258,9 @@ class StableDiffusionPipeline:
         if not self.torch_inference:
             for model_name, obj in self.models.items():
                 if not (model_name == 'vae' and self.config.get('vae_torch_fallback', False)):
-                    self.engine[model_name].allocate_buffers(shape_dict=obj.get_shape_dict(batch_size, image_height, image_width), device=self.device)
+                    self.engine[model_name].allocate_buffers(
+                        shape_dict=obj.get_shape_dict(batch_size, image_height, image_width, len_prompt),
+                        device=self.device)
 
     def teardown(self):
         for e in self.events.values():
@@ -274,37 +282,38 @@ class StableDiffusionPipeline:
         return model_name
 
     def getOnnxPath(self, model_name, onnx_dir, opt=True, suffix=''):
-        onnx_model_dir = os.path.join(onnx_dir, self.cachedModelName(model_name)+suffix+('.opt' if opt else ''))
+        onnx_model_dir = os.path.join(onnx_dir, self.cachedModelName(model_name) + suffix + ('.opt' if opt else ''))
         os.makedirs(onnx_model_dir, exist_ok=True)
         return os.path.join(onnx_model_dir, 'model.onnx')
 
     def getEnginePath(self, model_name, engine_dir, enable_refit=False, suffix=''):
-        return os.path.join(engine_dir, self.cachedModelName(model_name)+suffix+('.refit' if enable_refit else '')+'.trt'+trt.__version__+'.plan')
+        return os.path.join(engine_dir, self.cachedModelName(model_name) + suffix + (
+            '.refit' if enable_refit else '') + '.trt' + trt.__version__ + '.plan')
 
     def getWeightsMapPath(self, model_name, onnx_dir):
-        onnx_model_dir = os.path.join(onnx_dir, self.cachedModelName(model_name)+'.opt')
+        onnx_model_dir = os.path.join(onnx_dir, self.cachedModelName(model_name) + '.opt')
         os.makedirs(onnx_model_dir, exist_ok=True)
         return os.path.join(onnx_model_dir, 'weights_map.json')
 
     def getRefitNodesPath(self, model_name, onnx_dir, suffix=''):
-        onnx_model_dir = os.path.join(onnx_dir, self.cachedModelName(model_name)+'.opt')
+        onnx_model_dir = os.path.join(onnx_dir, self.cachedModelName(model_name) + '.opt')
         os.makedirs(onnx_model_dir, exist_ok=True)
-        return os.path.join(onnx_model_dir, 'refit'+suffix+'.json')
+        return os.path.join(onnx_model_dir, 'refit' + suffix + '.json')
 
     def loadEngines(
-        self,
-        engine_dir,
-        framework_model_dir,
-        onnx_dir,
-        onnx_opset,
-        opt_batch_size,
-        opt_image_height,
-        opt_image_width,
-        static_batch=False,
-        static_shape=True,
-        enable_refit=False,
-        enable_all_tactics=False,
-        timing_cache=None,
+            self,
+            engine_dir,
+            framework_model_dir,
+            onnx_dir,
+            onnx_opset,
+            opt_batch_size,
+            opt_image_height,
+            opt_image_width,
+            static_batch=False,
+            static_shape=True,
+            enable_refit=False,
+            enable_all_tactics=False,
+            timing_cache=None,
     ):
         """
         Build and load engines for TensorRT accelerated inference.
@@ -346,23 +355,39 @@ class StableDiffusionPipeline:
         if not self.pipeline_type.is_sd_xl_refiner():
             self.tokenizer = make_tokenizer(self.version, self.pipeline_type, self.hf_token, framework_model_dir)
         if self.pipeline_type.is_sd_xl():
-            self.tokenizer2 = make_tokenizer(self.version, self.pipeline_type, self.hf_token, framework_model_dir, subfolder='tokenizer_2')
+            self.tokenizer2 = make_tokenizer(self.version, self.pipeline_type, self.hf_token, framework_model_dir,
+                                             subfolder='tokenizer_2')
 
         # Load pipeline models
         models_args = {'version': self.version, 'pipeline': self.pipeline_type, 'device': self.device,
-            'hf_token': self.hf_token, 'verbose': self.verbose, 'framework_model_dir': framework_model_dir,
-            'max_batch_size': self.max_batch_size}
+                       'hf_token': self.hf_token, 'verbose': self.verbose, 'framework_model_dir': framework_model_dir,
+                       'max_batch_size': self.max_batch_size}
 
         if 'vae_encoder' in self.stages:
             self.models['vae_encoder'] = VAEEncoderModel(**models_args)
 
+        # ========= testing for loaded pytorch vae_encoder =====================
+        # from PIL import Image
+        # import PIL
+        # from utilities import preprocess_image
+        # input_image = 'input_img.png'
+        # input_image = Image.open(input_image)
+        # input_image = preprocess_image(input_image).cuda()
+        # image_latent = self.models['vae_encoder'].get_model()(input_image)
+        # ========= testing for loaded pytorch vae_encoder =====================
+
         if 'clip' in self.stages:
             subfolder = 'text_encoder'
-            self.models['clip'] = CLIPModel(**models_args, embedding_dim=get_clip_embedding_dim(self.version, self.pipeline_type), output_hidden_states=self.config.get('clip_hidden_states', False), subfolder=subfolder)
+            self.models['clip'] = CLIPModel(**models_args,
+                                            embedding_dim=get_clip_embedding_dim(self.version, self.pipeline_type),
+                                            output_hidden_states=self.config.get('clip_hidden_states', False),
+                                            subfolder=subfolder)
 
         if 'clip2' in self.stages:
             subfolder = 'text_encoder_2'
-            self.models['clip2'] = CLIPWithProjModel(**models_args, output_hidden_states=self.config.get('clip_hidden_states', False), subfolder=subfolder)
+            self.models['clip2'] = CLIPWithProjModel(**models_args,
+                                                     output_hidden_states=self.config.get('clip_hidden_states', False),
+                                                     subfolder=subfolder)
 
         lora_dict, lora_alphas = (None, None)
         if 'unet' in self.stages:
@@ -370,41 +395,63 @@ class StableDiffusionPipeline:
                 lora_dict, lora_alphas = self.lora_loader.get_dicts('unet')
                 assert len(lora_dict) == len(self.lora_scales)
             self.models['unet'] = UNetModel(**models_args, fp16=True, controlnets=self.controlnets,
-                lora_scales=self.lora_scales, lora_dict=lora_dict, lora_alphas=lora_alphas, do_classifier_free_guidance=self.do_classifier_free_guidance)
+                                            lora_scales=self.lora_scales, lora_dict=lora_dict, lora_alphas=lora_alphas,
+                                            do_classifier_free_guidance=self.do_classifier_free_guidance)
 
         if 'unetxl' in self.stages:
             if not self.pipeline_type.is_sd_xl_refiner() and self.lora_loader:
                 lora_dict, lora_alphas = self.lora_loader.get_dicts('unet')
                 assert len(lora_dict) == len(self.lora_scales)
             self.models['unetxl'] = UNetXLModel(**models_args, fp16=True,
-                lora_scales=self.lora_scales, lora_dict=lora_dict, lora_alphas=lora_alphas, do_classifier_free_guidance=self.do_classifier_free_guidance)
+                                                lora_scales=self.lora_scales, lora_dict=lora_dict,
+                                                lora_alphas=lora_alphas,
+                                                do_classifier_free_guidance=self.do_classifier_free_guidance)
 
         if 'vae' in self.stages:
             self.models['vae'] = VAEModel(**models_args)
 
         # Configure pipeline models to load
         model_names = self.models.keys()
-        lora_suffix = '-'+'-'.join([str(md5(path.encode('utf-8')).hexdigest())+'-'+('%.2f' % self.lora_scales[path]) for path in sorted(self.lora_loader.paths)]) if self.lora_loader else ''
+        lora_suffix = '-' + '-'.join(
+            [str(md5(path.encode('utf-8')).hexdigest()) + '-' + ('%.2f' % self.lora_scales[path]) for path in
+             sorted(self.lora_loader.paths)]) if self.lora_loader else ''
         # Enable refit and LoRA merging only for UNet & UNetXL for now
-        do_engine_refit = dict(zip(model_names, [not self.pipeline_type.is_sd_xl_refiner() and enable_refit and model_name.startswith('unet') for model_name in model_names]))
-        do_lora_merge = dict(zip(model_names, [not enable_refit and self.lora_loader and model_name.startswith('unet') for model_name in model_names]))
+        do_engine_refit = dict(zip(model_names, [
+            not self.pipeline_type.is_sd_xl_refiner() and enable_refit and model_name.startswith('unet') for model_name
+            in model_names]))
+        do_lora_merge = dict(zip(model_names,
+                                 [not enable_refit and self.lora_loader and model_name.startswith('unet') for model_name
+                                  in model_names]))
         # Torch fallback for VAE if specified
-        torch_fallback = dict(zip(model_names, [self.torch_inference or (model_name == 'vae' and self.config.get('vae_torch_fallback', False)) for model_name in model_names]))
-        model_suffix = dict(zip(model_names, [lora_suffix if do_lora_merge[model_name] else '' for model_name in model_names]))
-        onnx_path = dict(zip(model_names, [self.getOnnxPath(model_name, onnx_dir, opt=False, suffix=model_suffix[model_name]) for model_name in model_names]))
-        onnx_opt_path = dict(zip(model_names, [self.getOnnxPath(model_name, onnx_dir, suffix=model_suffix[model_name]) for model_name in model_names]))
-        engine_path = dict(zip(model_names, [self.getEnginePath(model_name, engine_dir, do_engine_refit[model_name], suffix=model_suffix[model_name]) for model_name in model_names]))
-        weights_map_path = dict(zip(model_names, [(self.getWeightsMapPath(model_name, onnx_dir) if do_engine_refit[model_name] else None) for model_name in model_names]))
+        torch_fallback = dict(zip(model_names, [
+            self.torch_inference or (model_name == 'vae' and self.config.get('vae_torch_fallback', False)) for
+            model_name in model_names]))
+        model_suffix = dict(
+            zip(model_names, [lora_suffix if do_lora_merge[model_name] else '' for model_name in model_names]))
+        onnx_path = dict(zip(model_names,
+                             [self.getOnnxPath(model_name, onnx_dir, opt=False, suffix=model_suffix[model_name]) for
+                              model_name in model_names]))
+        onnx_opt_path = dict(zip(model_names,
+                                 [self.getOnnxPath(model_name, onnx_dir, suffix=model_suffix[model_name]) for model_name
+                                  in model_names]))
+        engine_path = dict(zip(model_names, [
+            self.getEnginePath(model_name, engine_dir, do_engine_refit[model_name], suffix=model_suffix[model_name]) for
+            model_name in model_names]))
+        weights_map_path = dict(zip(model_names, [
+            (self.getWeightsMapPath(model_name, onnx_dir) if do_engine_refit[model_name] else None) for model_name in
+            model_names]))
 
         # Export models to ONNX and save weights name mapping
         for model_name, obj in self.models.items():
             if torch_fallback[model_name]:
                 continue
-            do_export_onnx = not os.path.exists(engine_path[model_name]) and not os.path.exists(onnx_opt_path[model_name])
+            do_export_onnx = not os.path.exists(engine_path[model_name]) and not os.path.exists(
+                onnx_opt_path[model_name])
             do_export_weights_map = weights_map_path[model_name] and not os.path.exists(weights_map_path[model_name])
             # FIXME do_export_weights_map needs ONNX graph
             if do_export_onnx or do_export_weights_map:
-                obj.export_onnx(onnx_path[model_name], onnx_opt_path[model_name], onnx_opset, opt_image_height, opt_image_width, enable_lora_merge=do_lora_merge[model_name])
+                obj.export_onnx(onnx_path[model_name], onnx_opt_path[model_name], onnx_opset, opt_image_height,
+                                opt_image_width, enable_lora_merge=do_lora_merge[model_name])
             if do_export_weights_map:
                 print(f"[I] Saving weights map: {weights_map_path[model_name]}")
                 obj.export_weights_map(onnx_opt_path[model_name], weights_map_path[model_name])
@@ -416,18 +463,18 @@ class StableDiffusionPipeline:
             engine = Engine(engine_path[model_name])
             if not os.path.exists(engine_path[model_name]):
                 update_output_names = obj.get_output_names() + obj.extra_output_names if obj.extra_output_names else None
-                use_tf32 = model_name == 'vae' and self.pipeline_type.is_sd_xl()
+                use_tf32 = (model_name == 'vae' or model_name == 'vae_encoder') and self.pipeline_type.is_sd_xl()
                 engine.build(onnx_opt_path[model_name],
-                    fp16=not use_tf32,
-                    tf32=use_tf32,
-                    input_profile=obj.get_input_profile(
-                        opt_batch_size, opt_image_height, opt_image_width,
-                        static_batch=static_batch, static_shape=static_shape
-                    ),
-                    enable_refit=do_engine_refit[model_name],
-                    enable_all_tactics=enable_all_tactics,
-                    timing_cache=timing_cache,
-                    update_output_names=update_output_names)
+                             fp16=not use_tf32,
+                             tf32=use_tf32,
+                             input_profile=obj.get_input_profile(
+                                 opt_batch_size, opt_image_height, opt_image_width,
+                                 static_batch=static_batch, static_shape=static_shape
+                             ),
+                             enable_refit=do_engine_refit[model_name],
+                             enable_all_tactics=enable_all_tactics,
+                             timing_cache=timing_cache,
+                             update_output_names=update_output_names)
             self.engine[model_name] = engine
 
         # Load TensorRT engines
@@ -442,11 +489,12 @@ class StableDiffusionPipeline:
                     [weights_name_mapping, weights_shape_mapping] = json.load(fp_wts)
                     refit_weights_path = self.getRefitNodesPath(model_name, engine_dir, suffix=lora_suffix)
                     if not os.path.exists(refit_weights_path):
-                            print(f"[I] Saving refit weights: {refit_weights_path}")
-                            model = merge_loras(obj.get_model(), obj.lora_dict, obj.lora_alphas, obj.lora_scales)
-                            refit_weights = get_refit_weights(model.state_dict(), onnx_opt_path[model_name], weights_name_mapping, weights_shape_mapping)
-                            torch.save(refit_weights, refit_weights_path)
-                            unload_model(model)
+                        print(f"[I] Saving refit weights: {refit_weights_path}")
+                        model = merge_loras(obj.get_model(), obj.lora_dict, obj.lora_alphas, obj.lora_scales)
+                        refit_weights = get_refit_weights(model.state_dict(), onnx_opt_path[model_name],
+                                                          weights_name_mapping, weights_shape_mapping)
+                        torch.save(refit_weights, refit_weights_path)
+                        unload_model(model)
                     else:
                         print(f"[I] Loading refit weights: {refit_weights_path}")
                         refit_weights = torch.load(refit_weights_path)
@@ -477,7 +525,7 @@ class StableDiffusionPipeline:
         return engine.infer(feed_dict, self.stream, use_cuda_graph=self.use_cuda_graph)
 
     def initialize_latents(self, batch_size, unet_channels, latent_height, latent_width):
-        latents_dtype = torch.float32 # text_embeddings.dtype
+        latents_dtype = torch.float32  # text_embeddings.dtype
         latents_shape = (batch_size, unet_channels, latent_height, latent_width)
         latents = torch.randn(latents_shape, device=self.device, dtype=latents_dtype, generator=self.generator)
         # Scale the initial noise by the standard deviation required by the scheduler
@@ -500,7 +548,7 @@ class StableDiffusionPipeline:
         if not images:
             return ()
         self.profile_start('preprocess', color='pink')
-        input_images=[]
+        input_images = []
         for image in images:
             image = image.to(self.device).float()
             if image.shape[0] != batch_size:
@@ -516,7 +564,10 @@ class StableDiffusionPipeline:
         if images is None:
             return None
         self.profile_start('preprocess', color='pink')
-        images = [(np.array(i.convert("RGB")).astype(np.float32) / 255.0)[..., None].transpose(3, 2, 0, 1).repeat(batch_size, axis=0) for i in images]
+        images = [
+            (np.array(i.convert("RGB")).astype(np.float32) / 255.0)[..., None].transpose(3, 2, 0, 1).repeat(batch_size,
+                                                                                                            axis=0) for
+            i in images]
         # do_classifier_free_guidance
         images = [torch.cat([torch.from_numpy(i).to(self.device).float()] * 2) for i in images]
         images = torch.cat([image[None, ...] for image in images], dim=0)
@@ -553,11 +604,13 @@ class StableDiffusionPipeline:
 
         # Tokenize prompt
         text_embeddings, text_hidden_states = tokenize(prompt, output_hidden_states)
-
+        B, N, C = text_embeddings.size()
+        text_embeddings = text_embeddings.view(1, B * N, C)
         if self.do_classifier_free_guidance:
             # Tokenize negative prompt
             uncond_embeddings, uncond_hidden_states = tokenize(negative_prompt, output_hidden_states)
-
+            B, N, C = uncond_embeddings.size()
+            uncond_embeddings = uncond_embeddings.view(1, B * N, C)
             # Concatenate the unconditional and text embeddings into a single batch to avoid doing two forward passes for classifier free guidance
             text_embeddings = torch.cat([uncond_embeddings, text_embeddings]).to(dtype=torch.float16)
 
@@ -565,7 +618,8 @@ class StableDiffusionPipeline:
             pooled_output = text_embeddings
 
         if output_hidden_states:
-            text_embeddings = torch.cat([uncond_hidden_states, text_hidden_states]).to(dtype=torch.float16) if self.do_classifier_free_guidance else text_hidden_states
+            text_embeddings = torch.cat([uncond_hidden_states, text_hidden_states]).to(
+                dtype=torch.float16) if self.do_classifier_free_guidance else text_hidden_states
 
         self.profile_stop('clip')
         if pooled_outputs:
@@ -581,7 +635,7 @@ class StableDiffusionPipeline:
         else:
             t_start = 0
 
-        timesteps = self.scheduler.timesteps[t_start * self.scheduler.order :]
+        timesteps = self.scheduler.timesteps[t_start * self.scheduler.order:]
 
         # Strength is irrelevant if we directly request a timestep to start at;
         # that is, strength is determined by the denoising_start instead.
@@ -610,18 +664,18 @@ class StableDiffusionPipeline:
         return timesteps, num_inference_steps - t_start
 
     def denoise_latent(self,
-        latents,
-        text_embeddings,
-        denoiser='unet',
-        timesteps=None,
-        step_offset=0,
-        mask=None,
-        masked_image_latents=None,
-        image_guidance=1.5,
-        controlnet_imgs=None,
-        controlnet_scales=None,
-        text_embeds=None,
-        time_ids=None):
+                       latents,
+                       text_embeddings,
+                       denoiser='unet',
+                       timesteps=None,
+                       step_offset=0,
+                       mask=None,
+                       masked_image_latents=None,
+                       image_guidance=1.5,
+                       controlnet_imgs=None,
+                       controlnet_scales=None,
+                       text_embeds=None,
+                       time_ids=None):
 
         assert image_guidance > 1.0, "Image guidance has to be > 1.0"
 
@@ -651,7 +705,8 @@ class StableDiffusionPipeline:
             else:
                 timestep_float = timestep.float() if timestep.dtype != torch.float32 else timestep
 
-                params = {"sample": latent_model_input, "timestep": timestep_float, "encoder_hidden_states": text_embeddings}
+                params = {"sample": latent_model_input, "timestep": timestep_float,
+                          "encoder_hidden_states": text_embeddings}
                 if controlnet_imgs is not None:
                     params.update({"images": controlnet_imgs, "controlnet_scales": controlnet_scales})
                 if text_embeds != None:
@@ -709,35 +764,76 @@ class StableDiffusionPipeline:
         print('| {:^15} | {:^12} |'.format('Module', 'Latency'))
         print('|-----------------|--------------|')
         if 'vae_encoder' in self.stages:
-            print('| {:^15} | {:>9.2f} ms |'.format('VAE-Enc', cudart.cudaEventElapsedTime(self.events['vae_encoder'][0], self.events['vae_encoder'][1])[1]))
-        print('| {:^15} | {:>9.2f} ms |'.format('CLIP', cudart.cudaEventElapsedTime(self.events['clip'][0], self.events['clip'][1])[1]))
-        print('| {:^15} | {:>9.2f} ms |'.format('UNet'+('+CNet' if self.pipeline_type.is_controlnet() else '')+' x '+str(denoising_steps), cudart.cudaEventElapsedTime(self.events['denoise'][0], self.events['denoise'][1])[1]))
-        print('| {:^15} | {:>9.2f} ms |'.format('VAE-Dec', cudart.cudaEventElapsedTime(self.events['vae'][0], self.events['vae'][1])[1]))
+            print('| {:^15} | {:>9.2f} ms |'.format('VAE-Enc',
+                                                    cudart.cudaEventElapsedTime(self.events['vae_encoder'][0],
+                                                                                self.events['vae_encoder'][1])[1]))
+        print('| {:^15} | {:>9.2f} ms |'.format('CLIP', cudart.cudaEventElapsedTime(self.events['clip'][0],
+                                                                                    self.events['clip'][1])[1]))
+        print('| {:^15} | {:>9.2f} ms |'.format(
+            'UNet' + ('+CNet' if self.pipeline_type.is_controlnet() else '') + ' x ' + str(denoising_steps),
+            cudart.cudaEventElapsedTime(self.events['denoise'][0], self.events['denoise'][1])[1]))
+        print('| {:^15} | {:>9.2f} ms |'.format('VAE-Dec', cudart.cudaEventElapsedTime(self.events['vae'][0],
+                                                                                       self.events['vae'][1])[1]))
         print('|-----------------|--------------|')
         print('| {:^15} | {:>9.2f} ms |'.format('Pipeline', walltime_ms))
         print('|-----------------|--------------|')
-        print('Throughput: {:.2f} image/s'.format(batch_size*1000./walltime_ms))
+        print('Throughput: {:.2f} image/s'.format(batch_size * 1000. / walltime_ms))
 
     def save_image(self, images, pipeline, prompt):
         # Save image
-        image_name_prefix = pipeline+'-fp16'+''.join(set(['-'+prompt[i].replace(' ','_')[:10] for i in range(len(prompt))]))+'-'
+        image_name_prefix = pipeline + '-fp16' + ''.join(
+            set(['-' + prompt[i].replace(' ', '_')[:10] for i in range(len(prompt))])) + '-'
         save_image(images, self.output_dir, image_name_prefix)
 
+    def split_prompts(self, prompts, target_group_size=75, num_groups=4):
+        prompts_list = prompts[0].split()
+        # 定义组列表
+        groups = [[] for _ in range(num_groups)]
+        current_group = 0
+        index = 0
+        while index < len(prompts_list) and current_group < num_groups:
+            current_count = 0
+            # 从当前索引开始，试图找到最近的逗号结尾的单词，同时不超过75个单词的限制
+            while current_count < target_group_size and index < len(prompts_list):
+                word = prompts_list[index]
+                groups[current_group].append(word)
+                current_count += 1
+                index += 1
+                # 如果当前单词以逗号结尾，检查是否已达到或接近组容量
+                if word.endswith(',') and current_count >= target_group_size:
+                    break
+                # 如果达到75个单词但未以逗号结尾，需要回溯到最近的逗号
+                if current_count == target_group_size:
+                    if not word.endswith(','):
+                        # 回溯到最近的逗号结尾
+                        while not groups[current_group][-1].endswith(','):
+                            groups[current_group].pop()
+                            index -= 1
+                    break
+            # 为下一个组做准备
+            if current_count > 0 and current_group < num_groups - 1:
+                current_group += 1
+        # 清除尾部可能的空组
+        groups = [group for group in groups if group]
+        # 重新搞成字符串
+        groups = [" ".join(group) for group in groups]
+        return groups
+
     def infer(
-        self,
-        prompt,
-        negative_prompt,
-        image_height,
-        image_width,
-        input_image=None,
-        image_strength=0.75,
-        mask_image=None,
-        controlnet_scales=None,
-        aesthetic_score=6.0,
-        negative_aesthetic_score=2.5,
-        warmup=False,
-        verbose=False,
-        save_image=True,
+            self,
+            prompt,
+            negative_prompt,
+            image_height,
+            image_width,
+            input_image=None,
+            image_strength=0.75,
+            mask_image=None,
+            controlnet_scales=None,
+            aesthetic_score=6.0,
+            negative_aesthetic_score=2.5,
+            warmup=False,
+            verbose=False,
+            save_image=True,
     ):
         """
         Run the diffusion pipeline.
@@ -769,7 +865,8 @@ class StableDiffusionPipeline:
         """
         assert len(prompt) == len(negative_prompt)
         batch_size = len(prompt)
-
+        # prompt = self.split_prompts(prompt)
+        # negative_prompt = negative_prompt * len(prompt)
         # Spatial dimensions of latent tensor
         latent_height = image_height // 8
         latent_width = image_width // 8
@@ -801,9 +898,9 @@ class StableDiffusionPipeline:
             if not (self.pipeline_type.is_img2img() or self.pipeline_type.is_sd_xl_refiner()):
                 # Initialize latents
                 latents = self.initialize_latents(batch_size=batch_size,
-                    unet_channels=4,
-                    latent_height=latent_height,
-                    latent_width=latent_width)
+                                                  unet_channels=4,
+                                                  latent_height=latent_height,
+                                                  latent_width=latent_width)
             if self.pipeline_type.is_controlnet():
                 denoise_kwargs.update({'controlnet_imgs': input_image, 'controlnet_scales': controlnet_scales})
 
@@ -819,10 +916,17 @@ class StableDiffusionPipeline:
                 # Encode if not a latent
                 image_latents = input_image if input_image.shape[1] == 4 else self.encode_image(input_image)
                 # Add noise to latents using timesteps
-                noise = torch.randn(image_latents.shape, generator=self.generator, device=self.device, dtype=torch.float32)
+                noise = torch.randn(image_latents.shape, generator=self.generator, device=self.device,
+                                    dtype=torch.float32)
                 latents = self.scheduler.add_noise(image_latents, noise, latent_timestep)
+                # latents = self.initialize_latents(batch_size=batch_size,
+                #     unet_channels=4,
+                #     latent_height=latent_height,
+                #     latent_width=latent_width)
+                print(1)
             elif self.pipeline_type.is_inpaint():
-                mask, mask_image = self.preprocess_images(batch_size, prepare_mask_and_masked_image(input_image, mask_image))
+                mask, mask_image = self.preprocess_images(batch_size,
+                                                          prepare_mask_and_masked_image(input_image, mask_image))
                 mask = torch.nn.functional.interpolate(mask, size=(latent_height, latent_width))
                 mask = torch.cat([mask] * 2)
                 masked_image_latents = self.encode_image(mask_image)
@@ -832,7 +936,8 @@ class StableDiffusionPipeline:
             # CLIP text encoder(s)
             if self.pipeline_type.is_sd_xl():
                 text_embeddings2, pooled_embeddings2 = self.encode_prompt(prompt, negative_prompt,
-                        encoder='clip2', pooled_outputs=True, output_hidden_states=True)
+                                                                          encoder='clip2', pooled_outputs=True,
+                                                                          output_hidden_states=True)
 
                 # Merge text embeddings
                 if self.pipeline_type.is_sd_xl_base():
@@ -842,8 +947,9 @@ class StableDiffusionPipeline:
                     text_embeddings = text_embeddings2
 
                 # Time embeddings
-                def _get_add_time_ids(original_size, crops_coords_top_left, target_size, dtype, aesthetic_score=None, negative_aesthetic_score=None):
-                    if self.pipeline_type.is_sd_xl_refiner(): #self.requires_aesthetics_score:
+                def _get_add_time_ids(original_size, crops_coords_top_left, target_size, dtype, aesthetic_score=None,
+                                      negative_aesthetic_score=None):
+                    if self.pipeline_type.is_sd_xl_refiner():  # self.requires_aesthetics_score:
                         add_time_ids = list(original_size + crops_coords_top_left + (aesthetic_score,))
                         if self.do_classifier_free_guidance:
                             add_neg_time_ids = list(original_size + crops_coords_top_left + (negative_aesthetic_score,))
@@ -862,7 +968,8 @@ class StableDiffusionPipeline:
                 target_size = (image_height, image_width)
                 if self.pipeline_type.is_sd_xl_refiner():
                     add_time_ids = _get_add_time_ids(
-                        original_size, crops_coords_top_left, target_size, dtype=text_embeddings.dtype, aesthetic_score=aesthetic_score, negative_aesthetic_score=negative_aesthetic_score
+                        original_size, crops_coords_top_left, target_size, dtype=text_embeddings.dtype,
+                        aesthetic_score=aesthetic_score, negative_aesthetic_score=negative_aesthetic_score
                     )
                 else:
                     add_time_ids = _get_add_time_ids(
@@ -895,7 +1002,8 @@ class StableDiffusionPipeline:
 
         return (latents, walltime_ms) if self.return_latents else (images, walltime_ms)
 
-    def run(self, prompt, negative_prompt, height, width, batch_size, batch_count, num_warmup_runs, use_cuda_graph, **kwargs):
+    def run(self, prompt, negative_prompt, height, width, batch_size, batch_count, num_warmup_runs, use_cuda_graph,
+            **kwargs):
         # Process prompt
         if not isinstance(prompt, list):
             raise ValueError(f"`prompt` must be of type `str` list, but is {type(prompt)}")

@@ -95,6 +95,7 @@ class PIPELINE_TYPE(Enum):
     CONTROLNET = auto()
     XL_EXTENSION = auto()
     XL_BASE = auto()
+    XL_BASE_IMG2IMG = auto()
     XL_REFINER = auto()
 
     def is_txt2img(self):
@@ -380,7 +381,7 @@ def process_pipeline_args(args):
     if args.height % 8 != 0 or args.width % 8 != 0:
         raise ValueError(f"Image height and width have to be divisible by 8 but specified as: {args.image_height} and {args.width}.")
 
-    max_batch_size = 4
+    max_batch_size = 1
     if args.batch_size > max_batch_size:
         raise ValueError(f"Batch size {args.batch_size} is larger than allowed {max_batch_size}.")
 

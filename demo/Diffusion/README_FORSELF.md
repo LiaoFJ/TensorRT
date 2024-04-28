@@ -54,5 +54,4 @@ python3 demo_txt2img_xl.py "Einstein" --version xl-1.0 --onnx-dir onnx-sdxl-ligh
 - Specify new directories for storing onnx and engine files when switching between versions, LoRAs, ControlNets, etc. This can be done using `--onnx-dir <new onnx dir>` and `--engine-dir <new engine dir>`.
 - Inference performance can be improved by enabling [CUDA graphs](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#cuda-graphs) using `--use-cuda-graph`. Enabling CUDA graphs requires fixed input shapes, so this flag must be combined with `--build-static-batch` and cannot be combined with `--build-dynamic-shape`.
 
-
-
+三个仓库：local debug, 9.2 以及dev_debug: 9.2 是用来做远程编译的（正式版）；local debug是来测试新功能的；dev_debug是来测试正式版的一些衍生问题的。

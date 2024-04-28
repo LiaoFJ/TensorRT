@@ -17,10 +17,12 @@
 
 import argparse
 
+import PIL
 from cuda import cudart
+from PIL import Image
 
 from stable_diffusion_pipeline import StableDiffusionPipeline
-from utilities import PIPELINE_TYPE, TRT_LOGGER, add_arguments, process_pipeline_args, save_image
+from utilities import PIPELINE_TYPE, TRT_LOGGER, add_arguments, process_pipeline_args, preprocess_image, save_image
 
 def parseArgs():
     parser = argparse.ArgumentParser(description="Options for Stable Diffusion XL Txt2Img Demo", conflict_handler='resolve')
@@ -46,7 +48,7 @@ class StableDiffusionXLPipeline(StableDiffusionPipeline):
         self.enable_refiner = enable_refiner
         self.nvtx_profile = kwargs['nvtx_profile']
         self.base = StableDiffusionPipeline(
-            pipeline_type=PIPELINE_TYPE.XL_BASE,
+            pipeline_type=PIPELINE_TYPE.XL_BASE_IMG2IMG,
             vae_scaling_factor=vae_scaling_factor,
             return_latents=self.enable_refiner,
             **kwargs)
@@ -79,7 +81,7 @@ class StableDiffusionXLPipeline(StableDiffusionPipeline):
             max_device_memory = max(max_device_memory, self.refiner.calculateMaxDeviceMemory())
         return max_device_memory
 
-    def run(self, prompt, negative_prompt, height, width, batch_size, batch_count, num_warmup_runs, use_cuda_graph, **kwargs_infer_refiner):
+    def run(self, prompt, negative_prompt, height, width, batch_size, batch_count, num_warmup_runs, use_cuda_graph, input_image, input_image_strength, **kwargs_infer_refiner):
         # Process prompt
         if not isinstance(prompt, list):
             raise ValueError(f"`prompt` must be of type `str` list, but is {type(prompt)}")
@@ -94,16 +96,16 @@ class StableDiffusionXLPipeline(StableDiffusionPipeline):
         if num_warmup_runs > 0:
             print("[I] Warming up ..")
             for _ in range(num_warmup_runs):
-                images, _ = self.base.infer(prompt, negative_prompt, height, width, warmup=True)
+                images, _ = self.base.infer(prompt, negative_prompt, height, width, input_image, input_image_strength, warmup=True)
                 if args.enable_refiner:
                     images, _ = self.refiner.infer(prompt, negative_prompt, height, width, input_image=images, warmup=True, **kwargs_infer_refiner)
 
         ret = []
         for _ in range(batch_count):
-            print("[I] Running StableDiffusionXL pipeline")
+            print("[I] Running StableDiffusionXL img2img pipeline")
             if self.nvtx_profile:
                 cudart.cudaProfilerStart()
-            latents, time_base = self.base.infer(prompt, negative_prompt, height, width, warmup=False)
+            latents, time_base = self.base.infer(prompt, negative_prompt, height, width, input_image, input_image_strength, warmup=False)
             if self.enable_refiner:
                 images, time_refiner = self.refiner.infer(prompt, negative_prompt, height, width, input_image=latents, warmup=False, **kwargs_infer_refiner)
                 ret.append(images)
@@ -120,6 +122,7 @@ class StableDiffusionXLPipeline(StableDiffusionPipeline):
             image_path_dir = "./output"
             image_name = "saveimage"
             save_image(images, image_path_dir, image_name) if self.enable_refiner else save_image(images, image_path_dir, image_name)
+            # Image.fromarray(images[i]).save(image_path)
 
         return ret
 
@@ -129,10 +132,21 @@ class StableDiffusionXLPipeline(StableDiffusionPipeline):
             self.refiner.teardown()
 
 if __name__ == "__main__":
-    print("[I] Initializing TensorRT accelerated StableDiffusionXL txt2img pipeline")
+    print("[I] Initializing TensorRT accelerated StableDiffusionXL img2img pipeline")
     args = parseArgs()
 
     kwargs_init_pipeline, kwargs_load_engine, args_run_demo = process_pipeline_args(args)
+
+    # load input image
+    input_image = Image.open(args.input_image)
+    image_width, image_height = input_image.size
+    if image_height != args.height or image_width != args.width:
+        print(f"[I] Resizing input_image to {args.height}x{args.width}")
+        input_image = input_image.resize((args.height, args.width))
+        image_height, image_width = args.height, args.width
+
+    if isinstance(input_image, PIL.Image.Image):
+        input_image = preprocess_image(input_image)
 
     # Initialize demo
     demo = StableDiffusionXLPipeline(vae_scaling_factor=0.13025, enable_refiner=args.enable_refiner, **kwargs_init_pipeline)
@@ -151,8 +165,10 @@ if __name__ == "__main__":
     demo.activateEngines(shared_device_memory)
     demo.loadResources(args.height, args.width, args.batch_size, args.seed)
 
+    demo_kwargs = {'input_image': input_image, 'input_image_strength': 0.75}
+
     # Run inference
     kwargs_infer_refiner = {'image_strength': args.image_strength} if args.enable_refiner else {}
-    demo.run(*args_run_demo, **kwargs_infer_refiner)
+    demo.run(*args_run_demo, **demo_kwargs, **kwargs_infer_refiner)
 
     demo.teardown()
