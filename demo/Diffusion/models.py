@@ -313,7 +313,7 @@ class BaseModel():
     def get_input_profile(self, batch_size, image_height, image_width, static_batch, static_shape):
         return None
 
-    def get_shape_dict(self, batch_size, image_height, image_width):
+    def get_shape_dict(self, batch_size, image_height, image_width, len_prompt):
         return None
 
     # Helper utility for ONNX export
@@ -582,7 +582,7 @@ class CLIPWithProjModel(CLIPModel):
             'text_embeddings': (batch_size * len_prompt, self.embedding_dim)
         }
         if 'hidden_states' in self.extra_output_names:
-            output["hidden_states"] = (batch_size, self.text_maxlen, self.embedding_dim)
+            output["hidden_states"] = (batch_size * len_prompt, self.text_maxlen, self.embedding_dim)
 
         return output
 
