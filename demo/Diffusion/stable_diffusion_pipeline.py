@@ -153,7 +153,7 @@ class StableDiffusionPipeline:
         # Pipeline type
         def check_and_add_element(lst, element, delete=None):
             [lst.append(x) for x in element if x not in lst]
-            lst.remove("unet") if delete == True else None
+            lst.remove("unet") if (delete == True and "unet" in lst) else None
 
         self.stages = []
         self.pipeline_type = pipeline_type
@@ -162,7 +162,7 @@ class StableDiffusionPipeline:
         if self.pipeline_type.is_img2img() or self.pipeline_type.is_inpaint():
             check_and_add_element(self.stages, ['vae_encoder', 'clip', 'unet', 'vae'])
         if self.pipeline_type.is_sd_xl_base():
-            check_and_add_element(self.stages, ['clip', 'clip2', 'unetxl'], delete=True)
+            check_and_add_element(self.stages, ['clip', 'clip2', 'unetxl', 'vae', 'vae_encoder'], delete=True)
             if not return_latents:
                 check_and_add_element(self.stages, ['vae'])
         elif self.pipeline_type.is_sd_xl_refiner():
@@ -604,18 +604,18 @@ class StableDiffusionPipeline:
 
         # Tokenize prompt
         text_embeddings, text_hidden_states = tokenize(prompt, output_hidden_states)
-        B, N, C = text_embeddings.size()
-        text_embeddings = text_embeddings.view(1, B * N, C)
+        B, N, C = text_hidden_states.size()
+        text_hidden_states = text_hidden_states.view(1, B * N, C)
+
         if self.do_classifier_free_guidance:
             # Tokenize negative prompt
             uncond_embeddings, uncond_hidden_states = tokenize(negative_prompt, output_hidden_states)
-            B, N, C = uncond_embeddings.size()
-            uncond_embeddings = uncond_embeddings.view(1, B * N, C)
+            uncond_embeddings = uncond_embeddings.view(text_hidden_states.size())
             # Concatenate the unconditional and text embeddings into a single batch to avoid doing two forward passes for classifier free guidance
             text_embeddings = torch.cat([uncond_embeddings, text_embeddings]).to(dtype=torch.float16)
 
         if pooled_outputs:
-            pooled_output = text_embeddings
+            pooled_output = torch.argmax(text_embeddings, dim=0).unsqueeze(dim=0)
 
         if output_hidden_states:
             text_embeddings = torch.cat([uncond_hidden_states, text_hidden_states]).to(

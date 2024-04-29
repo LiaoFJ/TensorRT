@@ -844,7 +844,7 @@ class UNetXLModel(BaseModel):
         xB = '2B' if self.xB == 2 else 'B'
         return {
             'sample': {0: xB, 2: 'H', 3: 'W'},
-            'encoder_hidden_states': {0: xB},
+            'encoder_hidden_states': {0: xB, 1: 'prompt_len'},
             'latent': {0: xB, 2: 'H', 3: 'W'},
             'text_embeds': {0: xB},
             'time_ids': {0: xB}
@@ -860,7 +860,7 @@ class UNetXLModel(BaseModel):
                        (self.xB * max_batch, self.unet_dim, max_latent_height, max_latent_width)],
             'encoder_hidden_states': [(self.xB * min_batch, self.text_maxlen, self.embedding_dim),
                                       (self.xB * batch_size, self.text_maxlen, self.embedding_dim),
-                                      (self.xB * max_batch, self.text_maxlen, self.embedding_dim)],
+                                      (self.xB * max_batch, self.text_maxlen * 4, self.embedding_dim)],
             'text_embeds': [(self.xB * min_batch, 1280), (self.xB * batch_size, 1280), (self.xB * max_batch, 1280)],
             'time_ids': [(self.xB * min_batch, self.time_dim), (self.xB * batch_size, self.time_dim),
                          (self.xB * max_batch, self.time_dim)]
