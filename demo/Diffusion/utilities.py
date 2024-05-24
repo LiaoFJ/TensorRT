@@ -344,9 +344,9 @@ def add_arguments(parser):
     parser.add_argument('--batch-count', type=int, default=1, help="Number of images to generate in sequence, one at a time.")
     parser.add_argument('--height', type=int, default=512, help="Height of image to generate (must be multiple of 8)")
     parser.add_argument('--width', type=int, default=512, help="Height of image to generate (must be multiple of 8)")
-    parser.add_argument('--denoising-steps', type=int, default=30, help="Number of denoising steps")
+    parser.add_argument('--denoising-steps', type=int, default=8, help="Number of denoising steps")
     parser.add_argument('--scheduler', type=str, default="Lightning", choices=["DDIM", "DDPM", "EulerA", "Euler", "LCM", "LMSD", "PNDM", "UniPC", "Lightning"], help="Scheduler for diffusion process")
-    parser.add_argument('--guidance-scale', type=float, default=7.5, help="Value of classifier-free guidance scale (must be greater than 1)")
+    parser.add_argument('--guidance-scale', type=float, default=0.0, help="Value of classifier-free guidance scale (must be greater than 1)")
     parser.add_argument('--lora-scale', type=float, nargs='+', default=None, help="Scale of LoRA weights, default 1 (must between 0 and 1)")
     parser.add_argument('--lora-path', type=str, nargs='+', default=None, help="Path to LoRA adaptor. Ex: 'latent-consistency/lcm-lora-sdv1-5'")
 

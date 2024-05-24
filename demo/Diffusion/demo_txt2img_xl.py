@@ -87,7 +87,7 @@ def parseArgs():
     parser.add_argument('--num-warmup-runs', type=int, default=1,
                         help="Number of warmup runs before benchmarking performance")
 
-    parser.add_argument('--guidance-scale', type=float, default=5.0,
+    parser.add_argument('--guidance-scale', type=float, default=0.0,
                         help="Value of classifier-free guidance scale (must be greater than 1)")
 
     parser.add_argument('--enable-refiner', action='store_true', help="Enable SDXL-Refiner model")
