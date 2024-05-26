@@ -20,6 +20,7 @@ import os
 import pathlib
 import time
 
+import PIL
 import numpy as np
 import nvtx
 import onnx
@@ -50,6 +51,7 @@ from utilities import (
     save_image
 )
 
+from diffusers.image_processor import VaeImageProcessor
 
 class StableDiffusionPipeline:
     """
@@ -200,6 +202,10 @@ class StableDiffusionPipeline:
         self.lora_scale=lora_scale
         self.lora_weights=lora_weights
 
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scaling_factor)
+        self.mask_processor = VaeImageProcessor(vae_scale_factor=self.vae_scaling_factor, do_normalize=False,
+                                                do_binarize=True, do_convert_grayscale=True)
+
     def loadResources(self, image_height, image_width, batch_size, seed):
         # Initialize noise generator
         self.generator = torch.Generator(device="cuda").manual_seed(seed) if seed else None
@@ -338,6 +344,7 @@ class StableDiffusionPipeline:
             self.models['unet'] = make_UNet(controlnet=self.controlnet, **models_args)
             models_args.pop('lora_scale')
             models_args.pop('lora_weights')
+
         if 'unetxl' in self.stages:
             models_args['lora_scale'] = self.lora_scale
             models_args['lora_weights'] = self.lora_weights
@@ -373,7 +380,7 @@ class StableDiffusionPipeline:
             refit_pattern_list = ['onnx::MatMul']
 
         if force_export:
-            force_export_models = all_models 
+            force_export_models = all_models
         if force_optimize:
             force_optimize_models = all_models
         if enable_refit:
@@ -419,7 +426,7 @@ class StableDiffusionPipeline:
                             onnx.save_model(
                                 onnx_opt_graph,
                                 onnx_opt_path,
-                                save_as_external_data=True, 
+                                save_as_external_data=True,
                                 all_tensors_to_one_file=True,
                                 convert_attribute=False)
                         else:
@@ -612,8 +619,8 @@ class StableDiffusionPipeline:
             # Expand the latents if we are doing classifier free guidance
             latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2), step_offset + step_index, timestep)
             if isinstance(mask, torch.Tensor):
-                latent_model_input = torch.cat([latent_model_input, mask, masked_image_latents], dim=1)
-
+                # latent_model_input = torch.cat([latent_model_input, mask, masked_image_latents], dim=1)
+                latent_model_input = latent_model_input
             # Predict the noise residual
             if self.torch_inference:
                 params = {"sample": latent_model_input, "timestep": timestep, "encoder_hidden_states": text_embeddings}
@@ -647,6 +654,88 @@ class StableDiffusionPipeline:
                 latents = self.scheduler.step(noise_pred, timestep, latents, return_dict=False)[0]
             else:
                 latents = self.scheduler.step(noise_pred, latents, step_offset + step_index, timestep)
+
+        latents = 1. / self.vae_scaling_factor * latents
+
+        self.profile_stop('denoise')
+        return latents
+
+    def denoise_latent_inpaint(self,
+        latents,
+        text_embeddings,
+        denoiser='unet',
+        timesteps=None,
+        step_offset=0,
+        mask=None,
+        masked_image_latents=None,
+        image_latents=None,
+        noise=None,
+        guidance=7.5,
+        image_guidance=1.5,
+        controlnet_imgs=None,
+        controlnet_scales=None,
+        text_embeds=None,
+        time_ids=None):
+
+        assert guidance > 1.0, "Guidance has to be > 1.0"
+        assert image_guidance > 1.0, "Image guidance has to be > 1.0"
+
+        controlnet_imgs = self.preprocess_controlnet_images(latents.shape[0], controlnet_imgs)
+
+        self.profile_start('denoise', color='blue')
+        if not isinstance(timesteps, torch.Tensor):
+            timesteps = self.scheduler.timesteps
+        for step_index, timestep in enumerate(timesteps):
+            # Expand the latents if we are doing classifier free guidance
+            latent_model_input = self.scheduler.scale_model_input(torch.cat([latents] * 2), step_offset + step_index, timestep)
+            if isinstance(mask, torch.Tensor):
+                # latent_model_input = torch.cat([latent_model_input, mask, masked_image_latents], dim=1)
+                latent_model_input = latent_model_input
+            # Predict the noise residual
+            if self.torch_inference:
+                params = {"sample": latent_model_input, "timestep": timestep, "encoder_hidden_states": text_embeddings}
+                if controlnet_imgs is not None:
+                    params.update({"images": controlnet_imgs, "controlnet_scales": controlnet_scales})
+                added_cond_kwargs = {}
+                if text_embeds != None:
+                    added_cond_kwargs.update({'text_embeds': text_embeds})
+                if time_ids != None:
+                    added_cond_kwargs.update({'time_ids': time_ids})
+                if text_embeds != None or time_ids != None:
+                    params.update({'added_cond_kwargs': added_cond_kwargs})
+                noise_pred = self.torch_models[denoiser](**params)["sample"]
+            else:
+                timestep_float = timestep.float() if timestep.dtype != torch.float32 else timestep
+
+                params = {"sample": latent_model_input, "timestep": timestep_float, "encoder_hidden_states": text_embeddings}
+                if controlnet_imgs is not None:
+                    params.update({"images": controlnet_imgs, "controlnet_scales": controlnet_scales})
+                if text_embeds != None:
+                    params.update({'text_embeds': text_embeds})
+                if time_ids != None:
+                    params.update({'time_ids': time_ids})
+                noise_pred = self.runEngine(denoiser, params)['latent']
+
+            # Perform guidance
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance * (noise_pred_text - noise_pred_uncond)
+
+
+            if type(self.scheduler) == UniPCMultistepScheduler:
+                latents = self.scheduler.step(noise_pred, timestep, latents, return_dict=False)[0]
+            else:
+                latents = self.scheduler.step(noise_pred, latents, step_offset + step_index, timestep)
+
+            init_latents_proper = image_latents
+            init_mask, _ = mask.chunk(2)
+
+            if step_index < len(timesteps) - 1:
+                noise_timestep = timesteps[step_index + 1]
+                init_latents_proper = self.scheduler.add_noise(
+                    init_latents_proper, noise, torch.tensor([noise_timestep])
+                )
+
+            latents = (1 - init_mask) * init_latents_proper + init_mask * latents
 
         latents = 1. / self.vae_scaling_factor * latents
 
@@ -779,12 +868,30 @@ class StableDiffusionPipeline:
                 else:
                     latents = self.scheduler.add_noise(image_latents, noise, t_start, latent_timestep)
             elif self.pipeline_type.is_inpaint():
-                mask, mask_image = self.preprocess_images(batch_size, prepare_mask_and_masked_image(input_image, mask_image))
-                mask = torch.nn.functional.interpolate(mask, size=(latent_height, latent_width))
+                # init image 在这里需要做preprocess
+                crops_coords = self.mask_processor.get_crop_region(mask_image, image_width, image_height, pad=32)
+                init_image = self.image_processor.preprocess(input_image, height=image_height, width=image_width,
+                                                         crops_coords=crops_coords, resize_mode='fill')
+                image_latents = init_image if init_image.shape[1] == 4 else self.encode_image(init_image)
+                noise = torch.randn(image_latents.shape, generator=self.generator, device=self.device, dtype=torch.float32)
+
+                # mask 在这里 也需要做preprocess: 这个时候的mask以及mask_image是等比例放大了的
+                mask_condition = self.mask_processor.preprocess(
+                    mask_image, height=image_height, width=image_width, crops_coords=crops_coords, resize_mode='fill')
+                masked_image = init_image * (mask_condition < 0.5)
+                mask = torch.nn.functional.interpolate(mask_condition, size=(latent_height, latent_width))
                 mask = torch.cat([mask] * 2)
-                masked_image_latents = self.encode_image(mask_image)
+                masked_image_latents = self.encode_image(masked_image)
                 masked_image_latents = torch.cat([masked_image_latents] * 2)
-                denoise_kwargs.update({'mask': mask, 'masked_image_latents': masked_image_latents})
+                denoise_kwargs.update({'image_latents': image_latents, 'noise': noise,
+                                       'mask': mask, 'masked_image_latents': masked_image_latents})
+
+                # mask, mask_image = self.preprocess_images(batch_size, prepare_mask_and_masked_image(input_image, mask_image))
+                # mask = torch.nn.functional.interpolate(mask, size=(latent_height, latent_width))
+                # mask = torch.cat([mask] * 2)
+                # masked_image_latents = self.encode_image(mask_image)
+                # masked_image_latents = torch.cat([masked_image_latents] * 2)
+                # denoise_kwargs.update({'mask': mask, 'masked_image_latents': masked_image_latents})
 
             # CLIP text encoder(s)
             if self.pipeline_type.is_sd_xl():
@@ -810,7 +917,7 @@ class StableDiffusionPipeline:
                     add_neg_time_ids = torch.tensor([add_neg_time_ids], dtype=dtype)
                     add_time_ids = torch.cat([add_neg_time_ids, add_time_ids], dim=0).to(device=self.device)
                     return add_time_ids
-  
+
                 original_size = (image_height, image_width)
                 crops_coords_top_left = (0, 0)
                 target_size = (image_height, image_width)
@@ -829,7 +936,13 @@ class StableDiffusionPipeline:
 
             # UNet denoiser + (optional) ControlNet(s)
             denoiser = 'unetxl' if self.pipeline_type.is_sd_xl() else 'unet'
-            latents = self.denoise_latent(latents, text_embeddings, denoiser=denoiser, guidance=self.guidance_scale, **denoise_kwargs)
+
+            # 修改这边latents的生成策略对于inpaint来说：
+            if not self.pipeline_type.is_inpaint():
+                latents = self.denoise_latent(latents, text_embeddings, denoiser=denoiser, guidance=self.guidance_scale, **denoise_kwargs)
+            else:
+                latents = self.denoise_latent_inpaint(latents, text_embeddings, denoiser=denoiser, guidance=self.guidance_scale, **denoise_kwargs)
+
 
         with torch.inference_mode(), trt.Runtime(TRT_LOGGER):
             # VAE decode latent (if applicable)
@@ -842,6 +955,9 @@ class StableDiffusionPipeline:
             e2e_toc = time.perf_counter()
 
         walltime_ms = (e2e_toc - e2e_tic) * 1000.
+
+        images = [self.image_processor.apply_overlay(mask_image, input_image, i, crops_coords) for i in images]
+
         if not warmup:
             self.print_summary(self.denoising_steps, walltime_ms, batch_size)
             if not self.return_latents and save_image:

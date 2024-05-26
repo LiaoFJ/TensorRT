@@ -35,7 +35,7 @@ def parseArgs():
 if __name__ == "__main__":
     print("[I] Initializing StableDiffusion inpainting demo using TensorRT")
     args = parseArgs()
-
+    args.height, args.width = 768, 512
     if args.input_image:
         input_image = Image.open(args.input_image).convert("RGB")
     else:

@@ -651,7 +651,7 @@ class UNet(BaseModel):
 
 def make_UNet(version, pipeline, hf_token, device, verbose, max_batch_size, controlnet=None, lora_weights=None, lora_scale=1):
     return UNet(version, pipeline, hf_token, fp16=True, device=device, verbose=verbose,
-            max_batch_size=max_batch_size, unet_dim=(9 if pipeline.is_inpaint() else 4),
+            max_batch_size=max_batch_size, unet_dim=4,
             controlnet=get_controlnets_path(controlnet), lora_weights=lora_weights,
             lora_scale=lora_scale)
 
