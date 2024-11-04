@@ -31,8 +31,8 @@ def parse_args():
     parser.add_argument(
         "--version",
         type=str,
-        default="flux.1-dev",
-        choices=["flux.1-dev"],
+        default="flux.1-schnell",
+        choices=["flux.1-dev", "flux.1-schnell"],
         help="Version of Flux",
     )
     parser.add_argument(
@@ -113,6 +113,9 @@ if __name__ == "__main__":
 
     kwargs_init_pipeline, kwargs_load_engine, _ = process_pipeline_args(args)
     args_run_demo = process_demo_args(args)
+
+    args.denoising_steps = 4
+    args.version = "flux.1-schnell"
 
     # Initialize demo
     demo = FluxPipeline(

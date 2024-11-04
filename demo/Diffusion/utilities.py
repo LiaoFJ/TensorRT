@@ -599,7 +599,7 @@ class PercentileAmaxes:
 
 def add_arguments(parser):
     # Stable Diffusion configuration
-    parser.add_argument('--version', type=str, default="1.5", choices=("1.4", "1.5", "dreamshaper-7", "2.0-base", "2.0", "2.1-base", "2.1", "xl-1.0", "xl-turbo", "svd-xt-1.1", "sd3", "cascade", "flux.1-dev"), help="Version of Stable Diffusion")
+    parser.add_argument('--version', type=str, default="1.5", choices=("1.4", "1.5", "dreamshaper-7", "2.0-base", "2.0", "2.1-base", "2.1", "xl-1.0", "xl-turbo", "svd-xt-1.1", "sd3", "cascade", "flux.1-dev", "flux.1-schnell"), help="Version of Stable Diffusion")
     parser.add_argument('prompt', nargs = '*', help="Text prompt(s) to guide image generation")
     parser.add_argument('--negative-prompt', nargs = '*', default=[''], help="The negative prompt(s) to guide the image generation.")
     parser.add_argument('--batch-size', type=int, default=1, choices=[1, 2, 4], help="Batch size (repeat prompt)")
@@ -647,7 +647,7 @@ def process_pipeline_args(args):
     if args.height % 8 != 0 or args.width % 8 != 0:
         raise ValueError(f"Image height and width have to be divisible by 8 but specified as: {args.image_height} and {args.width}.")
 
-    max_batch_size = 4
+    max_batch_size = 1
     if args.batch_size > max_batch_size:
         raise ValueError(f"Batch size {args.batch_size} is larger than allowed {max_batch_size}.")
 

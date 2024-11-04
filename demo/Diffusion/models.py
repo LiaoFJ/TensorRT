@@ -240,6 +240,8 @@ def get_path(version, pipeline, controlnets=None):
             return "stabilityai/stable-cascade-prior"
     elif version == 'flux.1-dev':
         return "black-forest-labs/FLUX.1-dev"
+    elif version == 'flux.1-schnell':
+        return "black-forest-labs/FLUX.1-schnell"
     else:
         raise ValueError(f"Unsupported version {version} + pipeline {pipeline.name}")
 
