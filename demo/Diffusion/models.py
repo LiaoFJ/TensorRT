@@ -246,7 +246,7 @@ def get_path(version, pipeline, controlnets=None):
         raise ValueError(f"Unsupported version {version} + pipeline {pipeline.name}")
 
 def get_clip_embedding_dim(version, pipeline):
-    if version in ("1.4", "1.5", "dreamshaper-7", "flux.1-dev"):
+    if version in ("1.4", "1.5", "dreamshaper-7", "flux.1-dev", "flux.1-schnell"):
         return 768
     elif version in ("2.0", "2.0-base", "2.1", "2.1-base"):
         return 1024
@@ -446,6 +446,8 @@ class BaseModel():
                     if enable_lora_merge:
                         model = merge_loras(model, self.lora_dict, self.lora_alphas, self.lora_scales)
                     inputs = self.get_sample_input(1, opt_image_height, opt_image_width, static_shape)
+                    if model.__class__.__name__ == 'FluxTransformer2DModel':
+                        print(1)
                     torch.onnx.export(model,
                         inputs,
                         onnx_path,
@@ -1700,26 +1702,48 @@ class FluxTransformerModel(BaseModel):
         return model
 
     def get_input_names(self):
+        if self.config['guidance_embeds'] == False:
+            return ['hidden_states', 'encoder_hidden_states', 'pooled_projections', 'timestep', 'img_ids', 'txt_ids']
+        else:
             return ['hidden_states', 'encoder_hidden_states', 'pooled_projections', 'timestep', 'img_ids', 'txt_ids', 'guidance']
 
     def get_output_names(self):
        return ['latent']
 
     def get_dynamic_axes(self):
-        return {
+        if self.config['guidance_embeds'] == False:
+            return {
             'hidden_states': {0: 'B', 1: 'latent_dim'},
             'encoder_hidden_states': {0: 'B'},
             'pooled_projections': {0: 'B'},
             'timestep': {0: 'B'},
             'img_ids': {0: 'latent_dim'},
-            'guidance': {0: 'B'},
         }
+        else:
+            return {
+                'hidden_states': {0: 'B', 1: 'latent_dim'},
+                'encoder_hidden_states': {0: 'B'},
+                'pooled_projections': {0: 'B'},
+                'timestep': {0: 'B'},
+                'img_ids': {0: 'latent_dim'},
+                'guidance': {0: 'B'},
+            }
 
     def get_input_profile(self, batch_size, image_height, image_width, static_batch, static_shape):
         latent_height, latent_width = self.check_dims(batch_size, image_height, image_width)
         min_batch, max_batch, min_image_height, max_image_height, min_image_width, max_image_width, min_latent_height, max_latent_height, min_latent_width, max_latent_width = \
             self.get_minmax_dims(batch_size, image_height, image_width, static_batch, static_shape)
-        return {
+        if self.config['guidance_embeds'] == False:
+            return {
+            'hidden_states': [(min_batch, (min_latent_height // 2) * (min_latent_width // 2), self.config['in_channels']), (batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels']), (max_batch, (max_latent_height // 2) * (max_latent_width // 2), self.config['in_channels'])],
+            'encoder_hidden_states': [(min_batch, self.text_maxlen, self.config['joint_attention_dim']), (batch_size, self.text_maxlen, self.config['joint_attention_dim']), (max_batch, self.text_maxlen, self.config['joint_attention_dim'])],
+            'pooled_projections': [(min_batch, self.config['pooled_projection_dim']), (batch_size, self.config['pooled_projection_dim']), (max_batch, self.config['pooled_projection_dim'])],
+            'timestep': [(min_batch,), (batch_size,), (max_batch,)],
+            'img_ids': [((min_latent_height // 2) * (min_latent_width // 2), 3), ((latent_height // 2) * (latent_width // 2), 3), ((max_latent_height // 2) * (max_latent_width // 2), 3)],
+            'txt_ids': [(self.text_maxlen, 3), (self.text_maxlen, 3), (self.text_maxlen, 3)],
+        }
+        else:
+            return {
             'hidden_states': [(min_batch, (min_latent_height // 2) * (min_latent_width // 2), self.config['in_channels']), (batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels']), (max_batch, (max_latent_height // 2) * (max_latent_width // 2), self.config['in_channels'])],
             'encoder_hidden_states': [(min_batch, self.text_maxlen, self.config['joint_attention_dim']), (batch_size, self.text_maxlen, self.config['joint_attention_dim']), (max_batch, self.text_maxlen, self.config['joint_attention_dim'])],
             'pooled_projections': [(min_batch, self.config['pooled_projection_dim']), (batch_size, self.config['pooled_projection_dim']), (max_batch, self.config['pooled_projection_dim'])],
@@ -1729,33 +1753,53 @@ class FluxTransformerModel(BaseModel):
             'guidance': [(min_batch,), (batch_size,), (max_batch,)],
         }
 
-
     def get_shape_dict(self, batch_size, image_height, image_width):
         latent_height, latent_width = self.check_dims(batch_size, image_height, image_width)
-        return {
-            'hidden_states': (batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels']),
-            'encoder_hidden_states': (batch_size, self.text_maxlen, self.config['joint_attention_dim']),
-            'pooled_projections': (batch_size, self.config['pooled_projection_dim']),
-            'timestep': (batch_size,),
-            'img_ids': ((latent_height // 2) * (latent_width // 2), 3),
-            'txt_ids': (self.text_maxlen, 3),
-            'latent': (batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels']),
-            'guidance': (batch_size,),
-        }
+        if self.config['guidance_embeds'] == False:
+            return {
+                'hidden_states': (batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels']),
+                'encoder_hidden_states': (batch_size, self.text_maxlen, self.config['joint_attention_dim']),
+                'pooled_projections': (batch_size, self.config['pooled_projection_dim']),
+                'timestep': (batch_size,),
+                'img_ids': ((latent_height // 2) * (latent_width // 2), 3),
+                'txt_ids': (self.text_maxlen, 3),
+                'latent': (batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels']),
+            }
+        else:
+            return {
+                'hidden_states': (batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels']),
+                'encoder_hidden_states': (batch_size, self.text_maxlen, self.config['joint_attention_dim']),
+                'pooled_projections': (batch_size, self.config['pooled_projection_dim']),
+                'timestep': (batch_size,),
+                'img_ids': ((latent_height // 2) * (latent_width // 2), 3),
+                'txt_ids': (self.text_maxlen, 3),
+                'latent': (batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels']),
+                'guidance': (batch_size,),
+            }
 
     def get_sample_input(self, batch_size, image_height, image_width, static_shape):
         latent_height, latent_width = self.check_dims(batch_size, image_height, image_width)
         dtype = torch.float16 if self.fp16 else torch.float32
-        return (
-            torch.randn(batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels'], dtype=dtype, device=self.device),
-            torch.randn(batch_size, self.text_maxlen, self.config['joint_attention_dim'], dtype=dtype, device=self.device),
-            torch.randn(batch_size, self.config['pooled_projection_dim'], dtype=dtype, device=self.device),
-            torch.tensor([1.]*batch_size, dtype=dtype, device=self.device),
-            torch.randn((latent_height // 2) * (latent_width // 2), 3, dtype=dtype, device=self.device),
-            torch.randn(self.text_maxlen, 3, dtype=dtype, device=self.device),
-            {
-                'guidance': torch.tensor([1.]*batch_size, dtype=dtype, device=self.device),
-            }
+        if self.config['guidance_embeds'] == False:
+            return (
+                torch.randn(batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels'], dtype=dtype, device=self.device),
+                torch.randn(batch_size, self.text_maxlen, self.config['joint_attention_dim'], dtype=dtype, device=self.device),
+                torch.randn(batch_size, self.config['pooled_projection_dim'], dtype=dtype, device=self.device),
+                torch.tensor([1.]*batch_size, dtype=dtype, device=self.device),
+                torch.randn((latent_height // 2) * (latent_width // 2), 3, dtype=dtype, device=self.device),
+                torch.randn(self.text_maxlen, 3, dtype=dtype, device=self.device),
+        )
+        else:
+            return (
+                torch.randn(batch_size, (latent_height // 2) * (latent_width // 2), self.config['in_channels'], dtype=dtype, device=self.device),
+                torch.randn(batch_size, self.text_maxlen, self.config['joint_attention_dim'], dtype=dtype, device=self.device),
+                torch.randn(batch_size, self.config['pooled_projection_dim'], dtype=dtype, device=self.device),
+                torch.tensor([1.]*batch_size, dtype=dtype, device=self.device),
+                torch.randn((latent_height // 2) * (latent_width // 2), 3, dtype=dtype, device=self.device),
+                torch.randn(self.text_maxlen, 3, dtype=dtype, device=self.device),
+                {
+                    'guidance': torch.tensor([1.]*batch_size, dtype=dtype, device=self.device),
+                }
         )
 
 class VAEModel(BaseModel):

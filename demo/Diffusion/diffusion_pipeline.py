@@ -77,7 +77,8 @@ class DiffusionPipeline(ABC):
         "svd-xt-1.1",
         "sd3",
         "cascade",
-        "flux.1-dev"
+        "flux.1-dev",
+        "flux.1-schnell"
     )
     SCHEDULER_DEFAULTS = {
         "1.4": "PNDM",
@@ -91,8 +92,11 @@ class DiffusionPipeline(ABC):
         "xl-turbo": "EulerA",
         "svd-xt-1.1": "Euler",
         "cascade": "DDPMWuerstchen",
-        "flux.1-dev": "FlowMatchEuler"
+        "flux.1-dev": "FlowMatchEuler",
+        "flux.1-schnell": "FlowMatchEuler",
+
     }
+
 
     def __init__(
         self,
