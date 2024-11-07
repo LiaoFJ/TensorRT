@@ -242,7 +242,7 @@ class DiffusionPipeline(ABC):
         if self.nvtx_profile:
             nvtx.end_range(self.markers[name])
 
-    def load_resources(self, image_height, image_width, batch_size, seed):
+    def loadResources(self, image_height, image_width, batch_size, seed):
         # Initialize noise generator
         if seed is not None:
             self.seed = seed
@@ -472,7 +472,7 @@ class DiffusionPipeline(ABC):
             if self.torch_fallback[model_name]:
                 self.torch_models[model_name] = obj.get_model(torch_inference=self.torch_inference)
 
-    def load_engines(
+    def loadEngines(
         self,
         engine_dir,
         framework_model_dir,
@@ -582,13 +582,13 @@ class DiffusionPipeline(ABC):
         # Reclaim GPU memory from torch cache
         torch.cuda.empty_cache()
 
-    def calculate_max_device_memory(self):
+    def calculateMaxDeviceMemory(self):
         max_device_memory = 0
         for model_name, engine in self.engine.items():
             max_device_memory = max(max_device_memory, engine.engine.device_memory_size)
         return max_device_memory
 
-    def activate_engines(self, shared_device_memory=None):
+    def activateEngines(self, shared_device_memory=None):
         if shared_device_memory is None:
             max_device_memory = self.calculate_max_device_memory()
             _, shared_device_memory = cudart.cudaMalloc(max_device_memory)
