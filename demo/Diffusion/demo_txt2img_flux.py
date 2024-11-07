@@ -111,11 +111,12 @@ if __name__ == "__main__":
     print("[I] Initializing Flux txt2img demo using TensorRT")
     args = parse_args()
 
+    args.denoising_steps = 4
+    args.version = "flux.1-schnell"
+
     kwargs_init_pipeline, kwargs_load_engine, _ = process_pipeline_args(args)
     args_run_demo = process_demo_args(args)
 
-    args.denoising_steps = 4
-    args.version = "flux.1-schnell"
 
     # Initialize demo
     demo = FluxPipeline(
